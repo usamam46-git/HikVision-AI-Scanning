@@ -52,6 +52,8 @@ class ApiConfig:
     employees_sync_path: str = "/api/face-attendance/employees"
     enrollment_sync_path: str = "/api/face-enrollment/sync"
     enrollment_status_report_path: str = "/api/face-enrollment/sync/report"
+    unknown_person_detect_path: str = "/api/unknown-persons/detect"
+    unknown_persons_sync_path: str = "/api/unknown-persons/sync"
     sync_poll_interval_seconds: int = 120
     enrollment_dataset_dir: str = "synced-enrollments"
 

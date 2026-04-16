@@ -33,11 +33,13 @@
     "detector_nms_threshold": 0.4
   },
   "api": {
-    "base_url": "https://your-live-domain.com",
+    "base_url": "https://api.afaqmis.com",
     "attendance_path": "/api/face-attendance/mark",
     "employees_sync_path": "/api/face-attendance/employees",
     "enrollment_sync_path": "/api/face-enrollment/sync",
     "enrollment_status_report_path": "/api/face-enrollment/sync/report",
+    "unknown_person_detect_path": "/api/unknown-persons/detect",
+    "unknown_persons_sync_path": "/api/unknown-persons/sync",
     "api_key": "payroll-face-attendance-secret-2026",
     "timeout_seconds": 5,
     "retry_attempts": 3,
