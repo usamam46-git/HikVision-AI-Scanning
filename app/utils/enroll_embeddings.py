@@ -37,10 +37,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    app_dir = Path(args.config).resolve().parent
-    config = load_config(args.config)
+def generate_embeddings(
+    input_dir: str | Path,
+    output: str | Path,
+    config_path: str | Path,
+) -> list[dict]:
+    app_dir = Path(config_path).resolve().parent
+    config = load_config(config_path)
     logger = setup_logger(
         name="enroll_embeddings",
         log_dir=str(app_dir / config.logging.log_dir),
@@ -54,7 +57,7 @@ def main() -> int:
         logger=logger,
     )
 
-    input_dir = Path(args.input_dir)
+    input_dir = Path(input_dir)
     records = []
 
     for employee_dir in sorted(path for path in input_dir.iterdir() if path.is_dir()):
@@ -89,7 +92,7 @@ def main() -> int:
 
             embeddings.append(embedding.tolist())
 
-        if len(embeddings) < 3:
+        if len(embeddings) < 1:
             logger.warning(
                 "insufficient_embeddings employee_id=%s name=%s count=%s",
                 employee_id,
@@ -112,12 +115,22 @@ def main() -> int:
             len(embeddings),
         )
 
-    output_path = Path(args.output)
+    output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
         json.dump(records, handle, indent=2)
 
     logger.info("enrollment_complete output=%s employees=%s", output_path, len(records))
+    return records
+
+
+def main() -> int:
+    args = parse_args()
+    generate_embeddings(
+        input_dir=args.input_dir,
+        output=args.output,
+        config_path=args.config,
+    )
     return 0
 
 

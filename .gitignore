@@ -1,0 +1,37 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Runtime logs and captured images
+app/logs/**
+*.log
+*.jpg
+*.jpeg
+*.png
+!app/logs/.gitkeep
+
+# Downloaded model files and archives
+app/models/*
+!app/models/.gitkeep
+buffalo_l/
+*.zip
+*.onnx
+
+# Local environment files
+.env
+.env.*

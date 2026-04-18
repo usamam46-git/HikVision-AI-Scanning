@@ -21,8 +21,10 @@ from app.utils.logging_utils import setup_logger
 class TrackState:
     track_id: str
     recent_ids: deque[int]
+    recent_unknowns: deque[bool]
     last_update: float
     bbox: tuple[int, int, int, int]
+    unknown_reported: bool = False
 
 
 class UnknownFaceLimiter:
@@ -67,11 +69,13 @@ class CameraWorker:
         self.api_client = AttendanceApiClient(config=self.config.api, logger=self.logger)
         self.last_seen: dict[int, float] = {}
         self.track_histories: dict[str, TrackState] = {}
+        self.last_reload_check = 0.0
         self.unknown_limiter = UnknownFaceLimiter(
             self.config.recognition.unknown_save_limit_per_hour
         )
         self.unknown_faces_dir = self.app_dir / self.config.logging.unknown_faces_dir
         self.unknown_faces_dir.mkdir(parents=True, exist_ok=True)
+        self.unknown_score_cutoff = max(0.35, self.config.recognition.threshold - 0.10)
 
     def run_forever(self) -> None:
         self.logger.info("camera_worker_started camera_id=%s", self.camera.id)
@@ -107,6 +111,7 @@ class CameraWorker:
     def _process_stream(self, capture: cv2.VideoCapture) -> None:
         frame_index = 0
         while True:
+            self._reload_employees_if_needed()
             ok, frame = capture.read()
             if not ok or frame is None:
                 self.logger.warning("empty_frame camera_id=%s", self.camera.id)
@@ -143,6 +148,8 @@ class CameraWorker:
 
         if result.accepted and result.employee_id is not None:
             state.recent_ids.append(result.employee_id)
+            state.recent_unknowns.clear()
+            state.unknown_reported = False
             confirmed = (
                 len(state.recent_ids) == self.config.recognition.min_frames
                 and len(set(state.recent_ids)) == 1
@@ -166,6 +173,24 @@ class CameraWorker:
                 if sent:
                     self.last_seen[result.employee_id] = time.time()
         else:
+            state.recent_ids.clear()
+            unknown_candidate = (
+                result.embedding is not None
+                and (
+                    result.reason == "missing_embedding"
+                    or (
+                        result.reason == "below_threshold"
+                        and float(result.score) <= self.unknown_score_cutoff
+                    )
+                )
+            )
+            state.recent_unknowns.append(
+                unknown_candidate
+            )
+            confirmed_unknown = (
+                len(state.recent_unknowns) == self.config.recognition.min_frames
+                and all(state.recent_unknowns)
+            )
             self.logger.info(
                 "unrecognized_face camera_id=%s reason=%s score=%.4f track=%s",
                 self.camera.id,
@@ -173,8 +198,18 @@ class CameraWorker:
                 result.score,
                 state.track_id,
             )
-            if result.reason in {"below_threshold", "missing_embedding"}:
-                self._save_unknown_face(face, frame)
+            if (
+                confirmed_unknown
+                and not state.unknown_reported
+            ):
+                saved_path = self._save_unknown_face(face, frame)
+                sent = self.api_client.send_unknown_person_detection(
+                    camera_id=self.camera.id,
+                    embedding=result.embedding.tolist(),
+                    image_path=saved_path,
+                    confidence_score=float(result.score) if result.score else None,
+                )
+                state.unknown_reported = sent
 
     def _can_emit_event(self, employee_id: int) -> bool:
         last_seen_at = self.last_seen.get(employee_id)
@@ -193,19 +228,20 @@ class CameraWorker:
             return False
         return True
 
-    def _save_unknown_face(self, face: dict, frame: np.ndarray) -> None:
+    def _save_unknown_face(self, face: dict, frame: np.ndarray) -> Path | None:
         if not self.unknown_limiter.allow():
-            return
+            return None
 
         bbox = np.asarray(face["bbox"], dtype=np.int32)
         left, top, right, bottom = bbox.tolist()
         crop = frame[max(0, top):max(0, bottom), max(0, left):max(0, right)]
         if crop.size == 0:
-            return
+            return None
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = self.unknown_faces_dir / f"{self.camera.id}_{timestamp}.jpg"
         cv2.imwrite(str(filename), crop)
+        return filename
 
     def _get_or_create_track(self, bbox: tuple[int, int, int, int]) -> TrackState:
         best_key: str | None = None
@@ -223,8 +259,10 @@ class CameraWorker:
         state = TrackState(
             track_id=track_id,
             recent_ids=deque(maxlen=self.config.recognition.min_frames),
+            recent_unknowns=deque(maxlen=self.config.recognition.min_frames),
             last_update=time.time(),
             bbox=bbox,
+            unknown_reported=False,
         )
         self.track_histories[track_id] = state
         return state
@@ -236,6 +274,17 @@ class CameraWorker:
         ]
         for key in expired:
             self.track_histories.pop(key, None)
+
+    def _reload_employees_if_needed(self) -> None:
+        now = time.time()
+        if now - self.last_reload_check < 3:
+            return
+
+        self.last_reload_check = now
+        try:
+            self.recognition.reload_employees_if_changed()
+        except Exception:
+            self.logger.exception("employees_reload_failed")
 
     def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
         width = frame.shape[1]
