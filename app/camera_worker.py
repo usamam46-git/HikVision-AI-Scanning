@@ -25,6 +25,7 @@ class TrackState:
     last_update: float
     bbox: tuple[int, int, int, int]
     unknown_reported: bool = False
+    emitted_employee_id: int | None = None
 
 
 class UnknownFaceLimiter:
@@ -67,7 +68,6 @@ class CameraWorker:
             logger=self.logger,
         )
         self.api_client = AttendanceApiClient(config=self.config.api, logger=self.logger)
-        self.last_seen: dict[int, float] = {}
         self.track_histories: dict[str, TrackState] = {}
         self.last_reload_check = 0.0
         self.unknown_limiter = UnknownFaceLimiter(
@@ -171,7 +171,7 @@ class CameraWorker:
                     camera_id=self.camera.id,
                 )
                 if sent:
-                    self.last_seen[result.employee_id] = time.time()
+                    state.emitted_employee_id = result.employee_id
         else:
             state.recent_ids.clear()
             unknown_candidate = (
@@ -212,20 +212,20 @@ class CameraWorker:
                 state.unknown_reported = sent
 
     def _can_emit_event(self, employee_id: int) -> bool:
-        last_seen_at = self.last_seen.get(employee_id)
-        if last_seen_at is None:
-            return True
-
-        elapsed = time.time() - last_seen_at
-        if elapsed < self.config.recognition.cooldown_seconds:
-            self.logger.info(
-                "attendance_suppressed employee_id=%s camera_id=%s elapsed=%.2f cooldown=%s",
-                employee_id,
-                self.camera.id,
-                elapsed,
-                self.config.recognition.cooldown_seconds,
-            )
-            return False
+        for state in self.track_histories.values():
+            if state.emitted_employee_id == employee_id:
+                elapsed = time.time() - state.last_update
+                suppress_reason = (
+                    "same_track" if elapsed <= 0.5 else "active_track"
+                )
+                self.logger.info(
+                    "attendance_suppressed employee_id=%s camera_id=%s reason=%s elapsed=%.2f",
+                    employee_id,
+                    self.camera.id,
+                    suppress_reason,
+                    elapsed,
+                )
+                return False
         return True
 
     def _save_unknown_face(self, face: dict, frame: np.ndarray) -> Path | None:
