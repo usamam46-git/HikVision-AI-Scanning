@@ -328,6 +328,8 @@ class FaceRecognitionEngine:
         self.recognition_config = recognition_config
         self.runtime_config = runtime_config
         self.logger = logger
+        self.employees_path = Path(employees_path)
+        self._employees_mtime = 0.0
         base_dir = Path(employees_path).resolve().parent
         self.detector = ScrfdDetector(
             model_path=self._resolve_model_path(
@@ -347,14 +349,16 @@ class FaceRecognitionEngine:
             ),
             providers=self.runtime_config.providers,
         )
-        self.employees = self._load_employees(employees_path)
+        self.employees = self._load_employees(self.employees_path)
 
     def _load_employees(self, employees_path: str | Path) -> list[EmployeeRecord]:
         path = Path(employees_path)
         if not path.exists():
             self.logger.warning("employees_file_missing path=%s", path)
+            self._employees_mtime = 0.0
             return []
 
+        self._employees_mtime = path.stat().st_mtime
         with path.open("r", encoding="utf-8") as handle:
             payload: list[dict[str, Any]] = json.load(handle)
 
@@ -379,6 +383,18 @@ class FaceRecognitionEngine:
 
         self.logger.info("loaded_employees count=%s", len(employees))
         return employees
+
+    def reload_employees_if_changed(self) -> bool:
+        if not self.employees_path.exists():
+            return False
+
+        current_mtime = self.employees_path.stat().st_mtime
+        if current_mtime <= self._employees_mtime:
+            return False
+
+        self.employees = self._load_employees(self.employees_path)
+        self.logger.info("employees_reloaded count=%s", len(self.employees))
+        return True
 
     def detect_faces(self, frame: np.ndarray) -> list[dict[str, Any]]:
         faces = self.detector.detect(frame)
